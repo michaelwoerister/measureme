@@ -49,6 +49,7 @@ pub struct StringId(u32);
 impl StringId {
     #[inline]
     pub fn reserved(id: u32) -> StringId {
+        assert!(id == id & STRING_ID_MASK);
         StringId(id)
     }
 }
@@ -56,19 +57,18 @@ impl StringId {
 // Tags for the binary encoding of strings
 
 /// Marks the end of a string component list.
-const TAG_TERMINATOR: u8 = 0;
+const TERMINATOR: u8 = 0xFF;
+const UTF8_CONTINUATION_MASK: u8 = 0b1100_0000;
+const UTF8_CONTINUATION_BYTE: u8 = 0b1000_0000;
 
-/// Marks a component that contains actual string data.
-const TAG_STR_VAL: u8 = 1;
-
-/// Marks a component that contains the ID of another string.
-const TAG_STR_REF: u8 = 2;
+const MAX_STRING_ID: u32 = 0x3FFF_FFFF;
+const STRING_ID_MASK: u32 = 0x3FFF_FFFF;
 
 /// The maximum id value a prereserved string may be.
-const MAX_PRE_RESERVED_STRING_ID: u32 = std::u32::MAX / 2;
-
+const MAX_PRE_RESERVED_STRING_ID: u32 = MAX_STRING_ID / 2;
 /// The id of the profile metadata string entry.
 pub(crate) const METADATA_STRING_ID: u32 = MAX_PRE_RESERVED_STRING_ID + 1;
+
 
 /// Write-only version of the string table
 pub struct StringTableBuilder<S: SerializationSink> {
@@ -84,28 +84,18 @@ pub trait SerializableString {
     fn serialize(&self, bytes: &mut [u8]);
 }
 
-// A simple string is encoded as
-//
-// [TAG_STR_VAL, len: u16, utf8_bytes, TAG_TERMINATOR]
-//
-// in the string table.
 impl SerializableString for str {
     #[inline]
     fn serialized_size(&self) -> usize {
-        1 + // tag
-        2 + // len
         self.len() + // actual bytes
         1 // terminator
     }
 
     #[inline]
     fn serialize(&self, bytes: &mut [u8]) {
-        assert!(self.len() <= std::u16::MAX as usize);
         let last_byte_index = bytes.len() - 1;
-        bytes[0] = TAG_STR_VAL;
-        LittleEndian::write_u16(&mut bytes[1..3], self.len() as u16);
-        bytes[3..last_byte_index].copy_from_slice(self.as_bytes());
-        bytes[last_byte_index] = TAG_TERMINATOR;
+        bytes[0..last_byte_index].copy_from_slice(self.as_bytes());
+        bytes[last_byte_index] = TERMINATOR;
     }
 }
 
@@ -115,17 +105,83 @@ pub enum StringComponent<'s> {
     Ref(StringId),
 }
 
-impl<'a> SerializableString for [StringComponent<'a>] {
+impl<'s> StringComponent<'s> {
     #[inline]
     fn serialized_size(&self) -> usize {
-        unimplemented!()
+        match *self {
+            StringComponent::Value(s) => s.len(),
+            StringComponent::Ref(_) => 4,
+        }
     }
 
     #[inline]
-    fn serialize(&self, _bytes: &mut [u8]) {
-        unimplemented!()
+    fn serialize<'b>(&self, bytes: &'b mut [u8]) -> &'b mut [u8] {
+        match *self {
+            StringComponent::Value(s) => {
+                bytes[..s.len()].copy_from_slice(s.as_bytes());
+                &mut bytes[s.len() ..]
+            }
+            StringComponent::Ref(string_id) => {
+                debug_assert_eq!(string_id.0, string_id.0 & STRING_ID_MASK);
+                LittleEndian::write_u32(&mut bytes[0..4], string_id.0);
+                &mut bytes[4 ..]
+            }
+        }
     }
 }
+
+impl<'a> SerializableString for [StringComponent<'a>] {
+    #[inline]
+    fn serialized_size(&self) -> usize {
+        self.iter().map(|c| c.serialized_size()).sum::<usize>() + // size of components
+        1 // terminator
+    }
+
+    #[inline]
+    fn serialize(&self, mut bytes: &mut [u8]) {
+        debug_assert!(bytes.len() == self.serialized_size());
+        for component in self.iter() {
+            bytes = component.serialize(bytes);
+        }
+
+        debug_assert!(bytes.len() == 1);
+        bytes[0] = TERMINATOR;
+    }
+}
+
+macro_rules! impl_serializable_string_for_fixed_size {
+    ($n:expr) => (
+        impl<'a> SerializableString for [StringComponent<'a>; $n] {
+            #[inline(always)]
+            fn serialized_size(&self) -> usize {
+                (&self[..]).serialized_size()
+            }
+
+            #[inline(always)]
+            fn serialize(&self, bytes: &mut [u8]) {
+                (&self[..]).serialize(bytes);
+            }
+        }
+    )
+}
+
+impl_serializable_string_for_fixed_size!(0);
+impl_serializable_string_for_fixed_size!(1);
+impl_serializable_string_for_fixed_size!(2);
+impl_serializable_string_for_fixed_size!(3);
+impl_serializable_string_for_fixed_size!(4);
+impl_serializable_string_for_fixed_size!(5);
+impl_serializable_string_for_fixed_size!(6);
+impl_serializable_string_for_fixed_size!(7);
+impl_serializable_string_for_fixed_size!(8);
+impl_serializable_string_for_fixed_size!(9);
+impl_serializable_string_for_fixed_size!(10);
+impl_serializable_string_for_fixed_size!(11);
+impl_serializable_string_for_fixed_size!(12);
+impl_serializable_string_for_fixed_size!(13);
+impl_serializable_string_for_fixed_size!(14);
+impl_serializable_string_for_fixed_size!(15);
+impl_serializable_string_for_fixed_size!(16);
 
 fn serialize_index_entry<S: SerializationSink>(sink: &S, id: StringId, addr: Addr) {
     sink.write_atomic(8, |bytes| {
@@ -174,6 +230,7 @@ impl<S: SerializationSink> StringTableBuilder<S> {
     #[inline]
     pub fn alloc<STR: SerializableString + ?Sized>(&self, s: &STR) -> StringId {
         let id = StringId(self.id_counter.fetch_add(1, Ordering::SeqCst));
+        assert_eq!(id.0, id.0 & STRING_ID_MASK);
         debug_assert!(id.0 > METADATA_STRING_ID);
         self.alloc_unchecked(id, s);
         id
@@ -198,29 +255,6 @@ pub struct StringRef<'st> {
 
 impl<'st> StringRef<'st> {
     pub fn to_string(&self) -> Cow<'st, str> {
-        let addr = self.table.index[&self.id].as_usize();
-        let tag = self.table.string_data[addr];
-
-        match tag {
-            TAG_STR_VAL => {
-                let len =
-                    LittleEndian::read_u16(&self.table.string_data[addr + 1..addr + 3]) as usize;
-                let next_component_addr = addr + 3 + len;
-                let next_tag = self.table.string_data[next_component_addr];
-
-                if next_tag == TAG_TERMINATOR {
-                    let bytes = &self.table.string_data[addr + 3..addr + 3 + len];
-                    return Cow::from(std::str::from_utf8(bytes).unwrap());
-                }
-            }
-            TAG_TERMINATOR => {
-                return Cow::from("");
-            }
-            _ => {
-                // we have to take the allocating path
-            }
-        }
-
         let mut output = String::new();
         self.write_to_string(&mut output);
         Cow::from(output)
@@ -232,28 +266,67 @@ impl<'st> StringRef<'st> {
         let mut pos = addr.as_usize();
 
         loop {
-            let tag = self.table.string_data[pos];
+            let byte = self.table.string_data[pos];
 
-            match tag {
-                TAG_STR_VAL => {
-                    pos += 1;
-                    let len =
-                        LittleEndian::read_u16(&self.table.string_data[pos..pos + 2]) as usize;
-                    pos += 2;
-                    let bytes = &self.table.string_data[pos..pos + len];
-                    let s = std::str::from_utf8(bytes).unwrap();
-                    output.push_str(s);
+            if byte == TERMINATOR {
+                return
+            } else if (byte & UTF8_CONTINUATION_MASK) == UTF8_CONTINUATION_BYTE {
+                // This is a string-id
+                let id = LittleEndian::read_u32(&self.table.string_data[pos .. pos + 4]);
+
+                let string_ref = StringRef {
+                    id: StringId(id),
+                    table: self.table
+                };
+
+                string_ref.write_to_string(output);
+
+                pos += 4;
+            } else {
+                while let Some((c, len)) = decode_utf8_char(&self.table.string_data[pos ..]) {
+                    output.push(c);
                     pos += len;
                 }
-
-                TAG_STR_REF => {
-                    unimplemented!();
-                }
-
-                TAG_TERMINATOR => return,
-
-                _ => unreachable!(),
             }
+        }
+    }
+}
+
+fn decode_utf8_char(bytes: &[u8]) -> Option<(char, usize)> {
+    use std::convert::TryFrom;
+
+    let first_byte = bytes[0] as u32;
+
+    let (codepoint, len) = if (first_byte & 0b1000_0000) == 0 {
+        (first_byte, 1)
+    } else if (first_byte & 0b1110_0000) == 0b1100_0000 {
+        let bits0 = first_byte & 0b0001_1111;
+        let bits1 = (bytes[1] & 0b0011_1111) as u32;
+
+        (bits0 << 6 | bits1, 2)
+    } else if (first_byte & 0b1111_0000) == 0b1110_0000 {
+        let bits0 = first_byte & 0b0001_1111;
+        let bits1 = (bytes[1] & 0b0011_1111) as u32;
+        let bits2 = (bytes[2] & 0b0011_1111) as u32;
+
+        ((bits0 << 12) | (bits1 << 6) | bits2, 3)
+    } else {
+        return None
+    };
+
+    match char::try_from(codepoint) {
+        Ok(c) => {
+            debug_assert!({
+                let test_bytes = &mut [0u8; 8];
+                c.encode_utf8(test_bytes);
+
+                &test_bytes[..len] == &bytes[..len]
+            });
+
+            Some((c, len))
+        }
+        Err(e) => {
+            panic!("StringTable: Encountered invalid UTF8 char: {:?}", e);
         }
     }
 }
@@ -326,6 +399,57 @@ mod tests {
             for &s in expected_strings {
                 string_ids.push(builder.alloc(s));
             }
+        }
+
+        let data_bytes = Arc::try_unwrap(data_sink).unwrap().into_bytes();
+        let index_bytes = Arc::try_unwrap(index_sink).unwrap().into_bytes();
+
+        let string_table = StringTable::new(data_bytes, index_bytes).unwrap();
+
+        for (&id, &expected_string) in string_ids.iter().zip(expected_strings.iter()) {
+            let str_ref = string_table.get(id);
+
+            assert_eq!(str_ref.to_string(), expected_string);
+
+            let mut write_to = String::new();
+            str_ref.write_to_string(&mut write_to);
+            assert_eq!(str_ref.to_string(), write_to);
+        }
+    }
+
+    #[test]
+    fn composite_string() {
+        use crate::serialization::ByteVecSink;
+
+        let data_sink = Arc::new(ByteVecSink::new());
+        let index_sink = Arc::new(ByteVecSink::new());
+
+        let expected_strings = &[
+            "abc", // 0
+            "abcabc", // 1
+            "abcabcabc", // 2
+            "abcabcabc", // 3
+            "abcabcabc", // 4
+            "abcabcabcabc", // 5
+            "xxabcuuuabcqqq", // 6
+            "xxxxxx", // 7
+        ];
+
+        let mut string_ids = vec![];
+
+        {
+            let builder = StringTableBuilder::new(data_sink.clone(), index_sink.clone());
+
+            let r = |id| StringComponent::Ref(id);
+            let v = |s| StringComponent::Value(s);
+
+            string_ids.push(builder.alloc("abc")); // 0
+            string_ids.push(builder.alloc(&[r(string_ids[0]), r(string_ids[0])])); // 1
+            string_ids.push(builder.alloc(&[r(string_ids[0]), r(string_ids[0]), r(string_ids[0])])); // 2
+            string_ids.push(builder.alloc(&[r(string_ids[1]), r(string_ids[0])])); // 3
+            string_ids.push(builder.alloc(&[r(string_ids[0]), r(string_ids[1])])); // 4
+            string_ids.push(builder.alloc(&[r(string_ids[1]), r(string_ids[1])])); // 5
+            string_ids.push(builder.alloc(&[v("xx"), r(string_ids[1]), v("uuu"), r(string_ids[1]), v("qqq"),])); // 6
         }
 
         let data_bytes = Arc::try_unwrap(data_sink).unwrap().into_bytes();

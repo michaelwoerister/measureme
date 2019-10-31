@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
-use measureme::{Event, TimestampKind};
+use measureme::Event;
 
 pub fn collapse_stacks<'a>(
     events: impl Iterator<Item = Event<'a>>,
