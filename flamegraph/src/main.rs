@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use measureme::ProfilingData;
 
@@ -25,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let profiling_data = ProfilingData::new(&opt.file_prefix)?;
 
-    let recorded_stacks = collapse_stacks(profiling_data.iter(), opt.interval)
+    let recorded_stacks = collapse_stacks(&profiling_data, Duration::from_millis(opt.interval))
         .iter()
         .map(|(unique_stack, count)| format!("{} {}", unique_stack, count))
         .collect::<Vec<_>>();
