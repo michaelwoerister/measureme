@@ -18,12 +18,17 @@ fn mk_filestem(file_name_stem: &str) -> PathBuf {
 }
 
 // Generate some profiling data. This is the part that would run in rustc.
-fn generate_profiling_data<S: SerializationSink>(filestem: &Path) -> Vec<Event<'static>> {
+fn generate_profiling_data<S: SerializationSink>(
+    filestem: &Path,
+    num_stacks: usize,
+    num_threads: usize,
+    // sleep: bool,
+) -> Vec<Event<'static>> {
     let profiler = Arc::new(Profiler::<S>::new(Path::new(filestem)).unwrap());
 
     let event_id_reserved = StringId::reserved(42);
 
-    let event_ids = &[
+    let event_ids = vec![
         (
             profiler.alloc_string("Generic"),
             profiler.alloc_string("SomeGenericActivity"),
@@ -38,20 +43,32 @@ fn generate_profiling_data<S: SerializationSink>(filestem: &Path) -> Vec<Event<'
     event_ids_as_str.insert(event_ids[1].0, "Query");
     event_ids_as_str.insert(event_ids[1].1, "SomeQuery");
 
-    let mut expected_events = Vec::new();
+    let threads: Vec<_> = (0.. num_threads).map(|_| {
+        let event_ids = event_ids.clone();
+        let profiler = profiler.clone();
+        let event_ids_as_str = event_ids_as_str.clone();
 
-    for i in 0..10_000 {
-        // Allocate some invocation stacks
+        std::thread::spawn(move || {
+            let mut expected_events = Vec::new();
 
-        pseudo_invocation(
-            &profiler,
-            i,
-            4,
-            event_ids,
-            &event_ids_as_str,
-            &mut expected_events,
-        );
-    }
+            for i in 0..num_stacks {
+                // Allocate some invocation stacks
+
+                pseudo_invocation(
+                    &profiler,
+                    i,
+                    4,
+                    &event_ids[..],
+                    &event_ids_as_str,
+                    &mut expected_events,
+                );
+            }
+
+            expected_events
+        })
+    }).collect();
+
+    let expected_events: Vec<_> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
 
     // An example of allocating the string contents of an event id that has
     // already been used
@@ -103,9 +120,15 @@ fn check_profiling_data(
     assert_eq!(count, num_expected_events);
 }
 
+pub fn run_serialization_bench<S: SerializationSink>(file_name_stem: &str, num_events: usize, num_threads: usize) {
+    let filestem = mk_filestem(file_name_stem);
+    generate_profiling_data::<S>(&filestem, num_events, num_threads);
+}
+
 pub fn run_end_to_end_serialization_test<S: SerializationSink>(file_name_stem: &str) {
     let filestem = mk_filestem(file_name_stem);
-    let expected_events = generate_profiling_data::<S>(&filestem);
+    // FIXME: make processing capable of verifying multi-thread data
+    let expected_events = generate_profiling_data::<S>(&filestem, 10_000, 1);
     process_profiling_data(&filestem, &expected_events);
 }
 
