@@ -66,7 +66,7 @@ use crate::file_header::{
 };
 use crate::serialization::{Addr, SerializationSink};
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
-use std::sync::atomic::{AtomicU32, Ordering};
+// use std::sync::atomic::{AtomicU32};
 use std::sync::Arc;
 
 /// A `StringId` is used to identify a string in the `StringTable`.
@@ -76,14 +76,37 @@ pub struct StringId(u32);
 
 impl StringId {
     #[inline]
-    pub fn reserved(id: u32) -> StringId {
-        assert!(id == id & STRING_ID_MASK);
+    pub fn new(id: u32) -> StringId {
+        assert!(id <= MAX_STRING_ID);
         StringId(id)
+    }
+
+    #[inline]
+    pub fn reserved(id: u32) -> StringId {
+        assert!(id <= METADATA_STRING_ID, "id = {}", id);
+        StringId(id)
+    }
+
+    #[inline]
+    pub fn is_reserved(self) -> bool {
+        self.0 <= METADATA_STRING_ID
     }
 
     #[inline]
     pub fn as_u32(self) -> u32 {
         self.0
+    }
+
+    #[inline]
+    pub fn from_addr(addr: Addr) -> StringId {
+        let id = addr.0 + FIRST_REGULAR_STRING_ID;
+        StringId::new(id)
+    }
+
+    #[inline]
+    pub fn to_addr(self) -> Addr {
+        assert!(self.0 >= FIRST_REGULAR_STRING_ID);
+        Addr(self.0 - FIRST_REGULAR_STRING_ID)
     }
 }
 
@@ -95,16 +118,21 @@ pub const MAX_STRING_ID: u32 = 0x3FFF_FFFF;
 pub const STRING_ID_MASK: u32 = 0x3FFF_FFFF;
 
 /// The maximum id value a prereserved string may be.
-const MAX_PRE_RESERVED_STRING_ID: u32 = MAX_STRING_ID / 2;
+const MAX_PRE_RESERVED_STRING_ID: u32 = 100_000_000;
 
 /// The id of the profile metadata string entry.
 pub const METADATA_STRING_ID: u32 = MAX_PRE_RESERVED_STRING_ID + 1;
+
+/// Some random string ID that we make sure cannot be generated or assigned to.
+pub const INVALID_STRING_ID: StringId = StringId(METADATA_STRING_ID + 1);
+
+pub const FIRST_REGULAR_STRING_ID: u32 = INVALID_STRING_ID.0 + 1;
 
 /// Write-only version of the string table
 pub struct StringTableBuilder<S: SerializationSink> {
     data_sink: Arc<S>,
     index_sink: Arc<S>,
-    id_counter: AtomicU32, // initialized to METADATA_STRING_ID + 1
+    // id_counter: AtomicU32, // initialized to METADATA_STRING_ID + 1
 }
 
 /// Anything that implements `SerializableString` can be written to a
@@ -217,7 +245,11 @@ impl_serializable_string_for_fixed_size!(14);
 impl_serializable_string_for_fixed_size!(15);
 impl_serializable_string_for_fixed_size!(16);
 
+// TODO: Index data could have special bulk mode that assigns multiple StringIds
+//       to the same addr.
+
 fn serialize_index_entry<S: SerializationSink>(sink: &S, id: StringId, addr: Addr) {
+    assert!(id.is_reserved());
     sink.write_atomic(8, |bytes| {
         LittleEndian::write_u32(&mut bytes[0..4], id.0);
         LittleEndian::write_u32(&mut bytes[4..8], addr.0);
@@ -233,18 +265,48 @@ impl<S: SerializationSink> StringTableBuilder<S> {
         StringTableBuilder {
             data_sink,
             index_sink,
-            id_counter: AtomicU32::new(METADATA_STRING_ID + 1),
+            // id_counter: AtomicU32::new(METADATA_STRING_ID + 1),
         }
     }
 
-    pub fn alloc_with_reserved_id<STR: SerializableString + ?Sized>(
-        &self,
-        id: StringId,
-        s: &STR,
-    ) -> StringId {
-        assert!(id.0 <= MAX_PRE_RESERVED_STRING_ID);
-        self.alloc_unchecked(id, s);
-        id
+    // pub fn alloc_with_reserved_id<STR: SerializableString + ?Sized>(
+    //     &self,
+    //     id: StringId,
+    //     s: &STR,
+    // ) -> StringId {
+    //     assert!(id.0 <= MAX_PRE_RESERVED_STRING_ID);
+    //     self.alloc_unchecked(id, s);
+    //     id
+    // }
+
+    pub fn map_reserved_id_to(&self, from: StringId, to: StringId) {
+        assert!(from.0 <= MAX_PRE_RESERVED_STRING_ID);
+        serialize_index_entry(&*self.index_sink, from, to.to_addr());
+    }
+
+    pub fn bulk_map_reserved_ids<I>(&self, from: I, to: StringId)
+    where
+        I: Iterator<Item = StringId> + ExactSizeIterator,
+    {
+        type MappingEntry = (u32, u32);
+        assert!(std::mem::size_of::<MappingEntry>() == 8);
+
+        let to_addr_le = to.to_addr().0.to_le();
+
+        let serialized: Vec<MappingEntry> = from
+            .map(|from| {
+                let id = from.0;
+                assert!(id <= MAX_PRE_RESERVED_STRING_ID);
+                (id.to_le(), to_addr_le)
+            })
+            .collect();
+
+        let num_bytes = serialized.len() * std::mem::size_of::<MappingEntry>();
+        let byte_ptr = serialized.as_ptr() as *const u8;
+
+        let bytes = unsafe { std::slice::from_raw_parts(byte_ptr, num_bytes) };
+
+        self.index_sink.write_bytes_atomic(bytes);
     }
 
     pub(crate) fn alloc_metadata<STR: SerializableString + ?Sized>(&self, s: &STR) -> StringId {
@@ -254,11 +316,16 @@ impl<S: SerializationSink> StringTableBuilder<S> {
     }
 
     pub fn alloc<STR: SerializableString + ?Sized>(&self, s: &STR) -> StringId {
-        let id = StringId(self.id_counter.fetch_add(1, Ordering::SeqCst));
-        assert!(id.0 > METADATA_STRING_ID);
-        assert!(id.0 <= MAX_STRING_ID);
-        self.alloc_unchecked(id, s);
-        id
+        // let id = StringId(self.id_counter.fetch_add(1, Ordering::SeqCst));
+        // assert!(id.0 > METADATA_STRING_ID);
+        // assert!(id.0 <= MAX_STRING_ID);
+        // self.alloc_unchecked(id, s);
+        let size_in_bytes = s.serialized_size();
+        let addr = self.data_sink.write_atomic(size_in_bytes, |mem| {
+            s.serialize(mem);
+        });
+
+        StringId::from_addr(addr)
     }
 
     #[inline]

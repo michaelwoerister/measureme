@@ -67,14 +67,25 @@ impl<S: SerializationSink> Profiler<S> {
         Ok(profiler)
     }
 
-    #[inline(always)]
-    pub fn alloc_string_with_reserved_id<STR: SerializableString + ?Sized>(
-        &self,
-        id: StringId,
-        s: &STR,
-    ) -> StringId {
-        self.string_table.alloc_with_reserved_id(id, s)
+    pub fn map_reserved_id_to(&self, from: StringId, to: StringId) {
+        self.string_table.map_reserved_id_to(from, to);
     }
+
+    pub fn bulk_map_reserved_ids<I>(&self, from: I, to: StringId)
+    where
+        I: Iterator<Item = StringId> + ExactSizeIterator,
+    {
+        self.string_table.bulk_map_reserved_ids(from, to);
+    }
+
+    // #[inline(always)]
+    // pub fn alloc_string_with_reserved_id<STR: SerializableString + ?Sized>(
+    //     &self,
+    //     id: StringId,
+    //     s: &STR,
+    // ) -> StringId {
+    //     self.string_table.alloc_with_reserved_id(id, s)
+    // }
 
     #[inline(always)]
     pub fn alloc_string<STR: SerializableString + ?Sized>(&self, s: &STR) -> StringId {
@@ -143,5 +154,14 @@ impl<'a, S: SerializationSink> Drop for TimingGuard<'a, S> {
         );
 
         self.profiler.record_raw_event(&raw_event);
+    }
+}
+
+impl<'a, S: SerializationSink> TimingGuard<'a, S> {
+    #[inline]
+    pub fn finish_with_override_event_id(mut self, event_id: StringId) {
+        self.event_id = event_id;
+        // Let's be explicit about it: Dropping the guard will end the event.
+        drop(self)
     }
 }

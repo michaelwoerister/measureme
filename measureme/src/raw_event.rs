@@ -116,7 +116,7 @@ impl RawEvent {
         {
             // We always emit data as little endian, which we have to do
             // manually on big endian targets.
-            use byteorder::{LittleEndian, ByteOrder};
+            use byteorder::{ByteOrder, LittleEndian};
 
             LittleEndian::write_u32(&mut bytes[0..], self.event_kind.as_u32());
             LittleEndian::write_u32(&mut bytes[4..], self.event_id.as_u32());
@@ -146,7 +146,7 @@ impl RawEvent {
 
         #[cfg(target_endian = "big")]
         {
-            use byteorder::{LittleEndian, ByteOrder};
+            use byteorder::{ByteOrder, LittleEndian};
             RawEvent {
                 event_kind: StringId::reserved(LittleEndian::read_u32(&bytes[0..])),
                 event_id: StringId::reserved(LittleEndian::read_u32(&bytes[4..])),

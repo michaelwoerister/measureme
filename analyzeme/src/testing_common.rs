@@ -73,7 +73,7 @@ fn generate_profiling_data<S: SerializationSink>(
 
     // An example of allocating the string contents of an event id that has
     // already been used
-    profiler.alloc_string_with_reserved_id(event_id_reserved, "SomeQuery");
+    profiler.map_reserved_id_to(event_id_reserved, profiler.alloc_string("SomeQuery"));
 
     expected_events
 }

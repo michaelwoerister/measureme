@@ -56,4 +56,6 @@ pub use crate::mmap_serialization_sink::MmapSerializationSink;
 pub use crate::profiler::{Profiler, ProfilerFiles, TimingGuard};
 pub use crate::raw_event::{RawEvent, MAX_INSTANT_TIMESTAMP, MAX_INTERVAL_TIMESTAMP};
 pub use crate::serialization::{Addr, ByteVecSink, SerializationSink};
-pub use crate::stringtable::{SerializableString, StringComponent, StringId, StringTableBuilder};
+pub use crate::stringtable::{
+    SerializableString, StringComponent, StringId, StringTableBuilder, INVALID_STRING_ID,
+};

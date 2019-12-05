@@ -1,6 +1,6 @@
+use parking_lot::Mutex;
 use std::error::Error;
 use std::path::Path;
-use parking_lot::Mutex;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct Addr(pub u32);
@@ -17,6 +17,10 @@ pub trait SerializationSink: Sized + Send + Sync + 'static {
     fn write_atomic<W>(&self, num_bytes: usize, write: W) -> Addr
     where
         W: FnOnce(&mut [u8]);
+
+    fn write_bytes_atomic(&self, bytes: &[u8]) -> Addr {
+        self.write_atomic(bytes.len(), |sink| sink.copy_from_slice(bytes))
+    }
 }
 
 /// A `SerializationSink` that writes to an internal `Vec<u8>` and can be
