@@ -13,8 +13,15 @@ use std::convert::TryInto;
 use std::error::Error;
 
 fn deserialize_index_entry(bytes: &[u8]) -> (StringId, Addr) {
+    // assert!(is_index_data_entry(bytes[0]));
+
+    let id = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+
+
+
     (
-        StringId::new(u32::from_le_bytes(bytes[0..4].try_into().unwrap())),
+        //                     1111_10xx
+        StringId::new(id & 0b__0000_0011__1111_1111__1111_1111__1111_1111),
         Addr(u32::from_le_bytes(bytes[4..8].try_into().unwrap())),
     )
 }
@@ -205,6 +212,7 @@ pub struct StringTable {
 
 impl StringTable {
     pub fn new(string_data: Vec<u8>, index_data: Vec<u8>) -> Result<StringTable, Box<dyn Error>> {
+        eprintln!("StringTable::new - begin");
         let string_data_format = read_file_header(&string_data, FILE_MAGIC_STRINGTABLE_DATA)?;
         let index_data_format = read_file_header(&index_data, FILE_MAGIC_STRINGTABLE_INDEX)?;
 
@@ -221,10 +229,14 @@ impl StringTable {
         }
 
         assert!(index_data.len() % 8 == 0);
-        let index: FxHashMap<_, _> = strip_file_header(&index_data)
-            .chunks(8)
-            .map(deserialize_index_entry)
-            .collect();
+        // let index: FxHashMap<_, _> = strip_file_header(&index_data)
+        //     .chunks(8)
+        //     .map(deserialize_index_entry)
+        //     .collect();
+
+        let index = decode_string_index_data(strip_file_header(&string_data));
+
+        eprintln!("StringTable::new - end");
 
         Ok(StringTable { string_data, index })
     }
@@ -238,6 +250,44 @@ impl StringTable {
         let id = StringId::new(METADATA_STRING_ID);
         self.get(id)
     }
+}
+
+fn is_index_data_entry(byte: u8) -> bool {
+    // See module-level documentation for more information on the encoding.
+    const MASK: u8 = 0b1111_1100;
+    const TAG: u8 =  0b1111_1000;
+    (byte & MASK) == TAG
+}
+
+
+fn decode_string_index_data(data: &[u8]) ->  FxHashMap<StringId, Addr> {
+    let mut pos = 0;
+    let mut map = FxHashMap::default();
+
+    while pos < data.len() {
+        let byte = data[pos];
+
+        if byte == TERMINATOR {
+            pos += 1;
+        } else if is_utf8_continuation_byte(byte) {
+            // string ref
+            pos += 4;
+        }
+        else if is_index_data_entry(byte) {
+            // index entry
+            let (id, addr) = deserialize_index_entry(&data[pos .. pos + 8]);
+
+            map.insert(id, addr);
+
+            pos += 8;
+        } else {
+            while let Some((_, len)) = decode_utf8_char(&data[pos..]) {
+                pos += len;
+            }
+        }
+    }
+
+    map
 }
 
 #[cfg(test)]

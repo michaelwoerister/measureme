@@ -124,7 +124,7 @@ pub const MAX_STRING_ID: u32 = 0x3FFF_FFFF;
 pub const STRING_ID_MASK: u32 = 0x3FFF_FFFF;
 
 /// The maximum id value a virtual string may be.
-const MAX_USER_VIRTUAL_STRING_ID: u32 = 100_000_000;
+const MAX_USER_VIRTUAL_STRING_ID: u32 = 0x03FF_FFFF - 1;
 
 /// The id of the profile metadata string entry.
 pub const METADATA_STRING_ID: u32 = MAX_USER_VIRTUAL_STRING_ID + 1;
@@ -137,7 +137,7 @@ pub const FIRST_REGULAR_STRING_ID: u32 = INVALID_STRING_ID + 1;
 /// Write-only version of the string table
 pub struct StringTableBuilder<S: SerializationSink> {
     data_sink: Arc<S>,
-    index_sink: Arc<S>,
+    // index_sink: Arc<S>,
 }
 
 /// Anything that implements `SerializableString` can be written to a
@@ -251,8 +251,12 @@ impl_serializable_string_for_fixed_size!(15);
 impl_serializable_string_for_fixed_size!(16);
 
 fn serialize_index_entry<S: SerializationSink>(sink: &S, id: StringId, addr: Addr) {
+    assert!((id.0 & 0b__0000_0011__1111_1111__1111_1111__1111_1111) == id.0);
+
     sink.write_atomic(8, |bytes| {
-        bytes[0..4].copy_from_slice(&id.0.to_le_bytes());
+        let id = (id.0 & 0b__0000_0011__1111_1111__1111_1111__1111_1111) | 0b__1111_1000__0000_0000__0000_0000__0000_0000;
+
+        bytes[0..4].copy_from_slice(&id.to_be_bytes());
         bytes[4..8].copy_from_slice(&addr.0.to_le_bytes());
     });
 }
@@ -265,7 +269,7 @@ impl<S: SerializationSink> StringTableBuilder<S> {
 
         StringTableBuilder {
             data_sink,
-            index_sink,
+            // index_sink,
         }
     }
 
@@ -275,7 +279,7 @@ impl<S: SerializationSink> StringTableBuilder<S> {
         // This assertion does not use `is_virtual` on purpose because that
         // would also allow to overwrite `METADATA_STRING_ID`.
         assert!(virtual_id.0 <= MAX_USER_VIRTUAL_STRING_ID);
-        serialize_index_entry(&*self.index_sink, virtual_id, concrete_id.to_addr());
+        serialize_index_entry(&*self.data_sink, virtual_id, concrete_id.to_addr());
     }
 
     pub fn bulk_map_virtual_to_single_concrete_string<I>(
@@ -307,14 +311,14 @@ impl<S: SerializationSink> StringTableBuilder<S> {
 
         let bytes = unsafe { std::slice::from_raw_parts(byte_ptr, num_bytes) };
 
-        self.index_sink.write_bytes_atomic(bytes);
+        self.data_sink.write_bytes_atomic(bytes);
     }
 
     pub(crate) fn alloc_metadata<STR: SerializableString + ?Sized>(&self, s: &STR) {
         let concrete_id = self.alloc(s);
         let virtual_id = StringId(METADATA_STRING_ID);
         assert!(virtual_id.is_virtual());
-        serialize_index_entry(&*self.index_sink, virtual_id, concrete_id.to_addr());
+        serialize_index_entry(&*self.data_sink, virtual_id, concrete_id.to_addr());
     }
 
     pub fn alloc<STR: SerializableString + ?Sized>(&self, s: &STR) -> StringId {

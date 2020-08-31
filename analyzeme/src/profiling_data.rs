@@ -45,6 +45,7 @@ pub struct ProfilingData {
 
 impl ProfilingData {
     pub fn new(path_stem: &Path) -> Result<ProfilingData, Box<dyn Error>> {
+        eprintln!("ProfilingData::new");
         let paths = ProfilerFiles::new(path_stem);
 
         let string_data = fs::read(paths.string_data_file).expect("couldn't read string_data file");
@@ -60,6 +61,7 @@ impl ProfilingData {
         string_index: Vec<u8>,
         events: Vec<u8>,
     ) -> Result<ProfilingData, Box<dyn Error>> {
+        eprintln!("ProfilingData::from_buffers - begin");
         let index_data = string_index;
         let event_data = events;
 
@@ -74,8 +76,11 @@ impl ProfilingData {
 
         let string_table = StringTable::new(string_data, index_data)?;
 
+        eprintln!("ProfilingData::from_buffers - metadata");
         let metadata = string_table.get_metadata().to_string();
         let metadata: Metadata = serde_json::from_str(&metadata)?;
+
+        eprintln!("ProfilingData::from_buffers - end");
 
         Ok(ProfilingData {
             string_table,
