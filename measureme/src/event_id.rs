@@ -1,4 +1,4 @@
-use crate::{Profiler, SerializationSink, StringComponent, StringId};
+use crate::{Profiler, ProfilerConfig, StringComponent, StringId};
 
 /// Event IDs are strings conforming to the following grammar:
 ///
@@ -53,12 +53,12 @@ impl EventId {
     }
 }
 
-pub struct EventIdBuilder<'p, S: SerializationSink> {
-    profiler: &'p Profiler<S>,
+pub struct EventIdBuilder<'p, C: ProfilerConfig> {
+    profiler: &'p Profiler<C>,
 }
 
-impl<'p, S: SerializationSink> EventIdBuilder<'p, S> {
-    pub fn new(profiler: &Profiler<S>) -> EventIdBuilder<'_, S> {
+impl<'p, C: ProfilerConfig> EventIdBuilder<'p, C> {
+    pub fn new(profiler: &Profiler<C>) -> EventIdBuilder<'_, C> {
         EventIdBuilder { profiler }
     }
 

@@ -1,9 +1,29 @@
 use crate::serialization::{Addr, SerializationSink};
+use crate::{GenericError, ProfilerConfig, ProfilerFiles, SerializationSinks};
 use parking_lot::Mutex;
 use std::error::Error;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::{path::Path, sync::Arc};
+
+#[derive(Copy, Clone, Debug)]
+pub struct FileSinkConfig;
+
+impl ProfilerConfig for FileSinkConfig {
+    type SerializationSink = FileSerializationSink;
+
+    fn create_sinks<P: AsRef<Path>>(
+        path_stem: P,
+    ) -> Result<SerializationSinks<FileSerializationSink>, GenericError> {
+        let paths = ProfilerFiles::new(path_stem.as_ref());
+
+        Ok(SerializationSinks {
+            events: Arc::new(FileSerializationSink::from_path(&paths.events_file)?),
+            string_data: Arc::new(FileSerializationSink::from_path(&paths.string_data_file)?),
+            string_index: Arc::new(FileSerializationSink::from_path(&paths.string_index_file)?),
+        })
+    }
+}
 
 pub struct FileSerializationSink {
     data: Mutex<Inner>,
@@ -16,7 +36,7 @@ struct Inner {
     addr: u32,
 }
 
-impl SerializationSink for FileSerializationSink {
+impl FileSerializationSink {
     fn from_path(path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
         fs::create_dir_all(path.parent().unwrap())?;
 
@@ -31,6 +51,9 @@ impl SerializationSink for FileSerializationSink {
             }),
         })
     }
+}
+
+impl SerializationSink for FileSerializationSink {
 
     #[inline]
     fn write_atomic<W>(&self, num_bytes: usize, write: W) -> Addr

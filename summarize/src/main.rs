@@ -2,7 +2,6 @@
 extern crate prettytable;
 
 use analyzeme::ProfilingData;
-use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::{path::PathBuf, time::Duration};
@@ -10,6 +9,7 @@ use std::{path::PathBuf, time::Duration};
 use prettytable::{Cell, Row, Table};
 use serde::Serialize;
 use structopt::StructOpt;
+use measureme::GenericError;
 
 mod analysis;
 mod diff;
@@ -53,7 +53,7 @@ enum Opt {
     Summarize(SummarizeOpt),
 }
 
-fn process_results(file: &PathBuf) -> Result<Results, Box<dyn Error>> {
+fn process_results(file: &PathBuf) -> Result<Results, GenericError> {
     if file.ends_with("json") {
         let reader = BufReader::new(File::open(&file)?);
 
@@ -66,13 +66,13 @@ fn process_results(file: &PathBuf) -> Result<Results, Box<dyn Error>> {
     }
 }
 
-fn write_results_json(file: &PathBuf, results: impl Serialize) -> Result<(), Box<dyn Error>> {
+fn write_results_json(file: &PathBuf, results: impl Serialize) -> Result<(), GenericError> {
     let file = BufWriter::new(File::create(file.with_extension("json"))?);
     serde_json::to_writer(file, &results)?;
     Ok(())
 }
 
-fn diff(opt: DiffOpt) -> Result<(), Box<dyn Error>> {
+fn diff(opt: DiffOpt) -> Result<(), GenericError> {
     let base = process_results(&opt.base)?;
     let change = process_results(&opt.change)?;
 
@@ -123,7 +123,7 @@ fn diff(opt: DiffOpt) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn summarize(opt: SummarizeOpt) -> Result<(), Box<dyn Error>> {
+fn summarize(opt: SummarizeOpt) -> Result<(), measureme::GenericError> {
     let data = ProfilingData::new(&opt.file_prefix)?;
 
     let mut results = analysis::perform_analysis(data);
@@ -243,7 +243,7 @@ fn summarize(opt: SummarizeOpt) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), measureme::GenericError> {
     let opt = Opt::from_args();
 
     match opt {

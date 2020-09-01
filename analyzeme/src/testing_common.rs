@@ -1,6 +1,6 @@
 use crate::timestamp::Timestamp;
 use crate::{Event, ProfilingData};
-use measureme::{EventId, EventIdBuilder, Profiler, SerializationSink, StringId};
+use measureme::{EventId, EventIdBuilder, Profiler, ProfilerConfig, StringId};
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use std::default::Default;
@@ -36,12 +36,12 @@ impl ExpectedEvent {
 }
 
 // Generate some profiling data. This is the part that would run in rustc.
-fn generate_profiling_data<S: SerializationSink>(
+fn generate_profiling_data<C: ProfilerConfig>(
     filestem: &Path,
     num_stacks: usize,
     num_threads: usize,
 ) -> Vec<Event<'static>> {
-    let profiler = Arc::new(Profiler::<S>::new(Path::new(filestem)).unwrap());
+    let profiler = Arc::new(Profiler::<C>::new(Path::new(filestem)).unwrap());
 
     let event_id_virtual = EventId::from_label(StringId::new_virtual(42));
     let event_id_builder = EventIdBuilder::new(&profiler);
@@ -96,17 +96,21 @@ fn generate_profiling_data<S: SerializationSink>(
         })
         .collect();
 
-    let expected_events: Vec<_> = threads
-        .into_iter()
-        .flat_map(|t| t.join().unwrap())
-        .collect();
-
     // An example of allocating the string contents of an event id that has
     // already been used
     profiler.map_virtual_to_concrete_string(
         event_id_virtual.to_string_id(),
         profiler.alloc_string("SomeQuery"),
     );
+
+    drop(profiler);
+
+    let expected_events: Vec<_> = threads
+        .into_iter()
+        .flat_map(|t| t.join().unwrap())
+        .collect();
+
+    eprintln!("drop profiler");
 
     expected_events
 }
@@ -187,26 +191,26 @@ fn collect_events_per_thread<'a>(
     per_thread
 }
 
-pub fn run_serialization_bench<S: SerializationSink>(
+pub fn run_serialization_bench<C: ProfilerConfig>(
     file_name_stem: &str,
     num_events: usize,
     num_threads: usize,
 ) {
     let filestem = mk_filestem(file_name_stem);
-    generate_profiling_data::<S>(&filestem, num_events, num_threads);
+    generate_profiling_data::<C>(&filestem, num_events, num_threads);
 }
 
-pub fn run_end_to_end_serialization_test<S: SerializationSink>(
+pub fn run_end_to_end_serialization_test<C: ProfilerConfig>(
     file_name_stem: &str,
     num_threads: usize,
 ) {
     let filestem = mk_filestem(file_name_stem);
-    let expected_events = generate_profiling_data::<S>(&filestem, 10_000, num_threads);
+    let expected_events = generate_profiling_data::<C>(&filestem, 10_000, num_threads);
     process_profiling_data(&filestem, &expected_events);
 }
 
-fn pseudo_invocation<S: SerializationSink>(
-    profiler: &Profiler<S>,
+fn pseudo_invocation<C: ProfilerConfig>(
+    profiler: &Profiler<C>,
     random: usize,
     thread_id: u32,
     recursions_left: usize,
