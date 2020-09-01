@@ -68,6 +68,7 @@ use crate::file_header::{
 };
 use crate::serialization::{Addr, SerializationSink};
 use std::sync::Arc;
+use crate::GenericError;
 
 /// A `StringId` is used to identify a string in the `StringTable`. It is
 /// either a regular `StringId`, meaning that it contains the absolute address
@@ -258,15 +259,15 @@ fn serialize_index_entry<S: SerializationSink>(sink: &S, id: StringId, addr: Add
 }
 
 impl<S: SerializationSink> StringTableBuilder<S> {
-    pub fn new(data_sink: Arc<S>, index_sink: Arc<S>) -> StringTableBuilder<S> {
+    pub fn new(data_sink: Arc<S>, index_sink: Arc<S>) -> Result<StringTableBuilder<S>, GenericError> {
         // The first thing in every file we generate must be the file header.
-        write_file_header(&*data_sink, FILE_MAGIC_STRINGTABLE_DATA);
-        write_file_header(&*index_sink, FILE_MAGIC_STRINGTABLE_INDEX);
+        write_file_header(&mut data_sink.as_std_write(), FILE_MAGIC_STRINGTABLE_DATA)?;
+        write_file_header(&mut index_sink.as_std_write(), FILE_MAGIC_STRINGTABLE_INDEX)?;
 
-        StringTableBuilder {
+        Ok(StringTableBuilder {
             data_sink,
             index_sink,
-        }
+        })
     }
 
     /// Creates a mapping so that `virtual_id` will resolve to the contents of

@@ -1,6 +1,4 @@
 use parking_lot::Mutex;
-use std::error::Error;
-use std::path::Path;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct Addr(pub u32);
@@ -12,7 +10,6 @@ impl Addr {
 }
 
 pub trait SerializationSink: Sized + Send + Sync + 'static {
-    fn from_path(path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>>;
 
     /// Atomically write `num_bytes` to the sink. The implementation must ensure
     /// that concurrent invocations of `write_atomic` do not conflict with each
@@ -30,6 +27,10 @@ pub trait SerializationSink: Sized + Send + Sync + 'static {
     /// benefical to directly serialize into the output buffer).
     fn write_bytes_atomic(&self, bytes: &[u8]) -> Addr {
         self.write_atomic(bytes.len(), |sink| sink.copy_from_slice(bytes))
+    }
+
+    fn as_std_write<'a>(&'a self) -> StdWriteAdapter<'a, Self> {
+        StdWriteAdapter(self)
     }
 }
 
@@ -50,13 +51,13 @@ impl ByteVecSink {
     pub fn into_bytes(self) -> Vec<u8> {
         self.data.into_inner()
     }
+
+    pub fn clone_bytes(&self) -> Vec<u8> {
+        self.data.lock().clone()
+    }
 }
 
 impl SerializationSink for ByteVecSink {
-    fn from_path(_path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        unimplemented!()
-    }
-
     fn write_atomic<W>(&self, num_bytes: usize, write: W) -> Addr
     where
         W: FnOnce(&mut [u8]),
@@ -77,4 +78,28 @@ impl std::fmt::Debug for ByteVecSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ByteVecSink")
     }
+}
+
+impl std::io::Write for ByteVecSink {
+    fn write(&mut self, bytes: &[u8]) -> std::result::Result<usize, std::io::Error> {
+        self.write_bytes_atomic(bytes);
+
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
+        Ok(())
+    }
+}
+
+pub struct StdWriteAdapter<'a, S: SerializationSink>(&'a S);
+
+impl<'a, S: SerializationSink> std::io::Write for StdWriteAdapter<'a, S> {
+
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write_bytes_atomic(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
 }

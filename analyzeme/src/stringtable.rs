@@ -10,7 +10,7 @@ use memchr::memchr;
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use std::convert::TryInto;
-use std::error::Error;
+use measureme::GenericError;
 
 fn deserialize_index_entry(bytes: &[u8]) -> (StringId, Addr) {
     (
@@ -204,7 +204,7 @@ pub struct StringTable {
 }
 
 impl StringTable {
-    pub fn new(string_data: Vec<u8>, index_data: Vec<u8>) -> Result<StringTable, Box<dyn Error>> {
+    pub fn new(string_data: Vec<u8>, index_data: Vec<u8>) -> Result<StringTable, GenericError> {
         let string_data_format = read_file_header(&string_data, FILE_MAGIC_STRINGTABLE_DATA)?;
         let index_data_format = read_file_header(&index_data, FILE_MAGIC_STRINGTABLE_INDEX)?;
 
@@ -264,7 +264,7 @@ mod tests {
         let mut string_ids = vec![];
 
         {
-            let builder = StringTableBuilder::new(data_sink.clone(), index_sink.clone());
+            let builder = StringTableBuilder::new(data_sink.clone(), index_sink.clone()).unwrap();
 
             for &s in expected_strings {
                 string_ids.push(builder.alloc(s));
@@ -306,7 +306,7 @@ mod tests {
         let mut string_ids = vec![];
 
         {
-            let builder = StringTableBuilder::new(data_sink.clone(), index_sink.clone());
+            let builder = StringTableBuilder::new(data_sink.clone(), index_sink.clone()).unwrap();
 
             let r = |id| StringComponent::Ref(id);
             let v = |s| StringComponent::Value(s);

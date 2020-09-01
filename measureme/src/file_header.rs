@@ -2,31 +2,32 @@
 //! consists of a 4 byte file magic string and a 4 byte little-endian version
 //! number.
 
-use crate::serialization::SerializationSink;
 use std::convert::TryInto;
-use std::error::Error;
+use crate::GenericError;
 
-pub const CURRENT_FILE_FORMAT_VERSION: u32 = 5;
+pub const CURRENT_FILE_FORMAT_VERSION: u32 = 6;
 pub const FILE_MAGIC_EVENT_STREAM: &[u8; 4] = b"MMES";
 pub const FILE_MAGIC_STRINGTABLE_DATA: &[u8; 4] = b"MMSD";
 pub const FILE_MAGIC_STRINGTABLE_INDEX: &[u8; 4] = b"MMSI";
+pub const FILE_MAGIC_PAGED_FORMAT: &[u8; 4] = b"MMPF";
+
 
 /// The size of the file header in bytes. Note that functions in this module
 /// rely on this size to be `8`.
 pub const FILE_HEADER_SIZE: usize = 8;
 
-pub fn write_file_header<S: SerializationSink>(s: &S, file_magic: &[u8; 4]) {
+pub fn write_file_header(s: &mut dyn std::io::Write, file_magic: &[u8; 4]) -> Result<(), GenericError> {
     // The implementation here relies on FILE_HEADER_SIZE to have the value 8.
     // Let's make sure this assumption cannot be violated without being noticed.
     assert_eq!(FILE_HEADER_SIZE, 8);
 
-    s.write_atomic(FILE_HEADER_SIZE, |bytes| {
-        bytes[0..4].copy_from_slice(file_magic);
-        bytes[4..8].copy_from_slice(&CURRENT_FILE_FORMAT_VERSION.to_le_bytes());
-    });
+    s.write_all(file_magic).map_err(Box::new)?;
+    s.write_all(&CURRENT_FILE_FORMAT_VERSION.to_le_bytes()).map_err(Box::new)?;
+
+    Ok(())
 }
 
-pub fn read_file_header(bytes: &[u8], expected_magic: &[u8; 4]) -> Result<u32, Box<dyn Error>> {
+pub fn read_file_header(bytes: &[u8], expected_magic: &[u8; 4]) -> Result<u32, GenericError> {
     // The implementation here relies on FILE_HEADER_SIZE to have the value 8.
     // Let's make sure this assumption cannot be violated without being noticed.
     assert_eq!(FILE_HEADER_SIZE, 8);
@@ -54,13 +55,13 @@ pub fn strip_file_header(data: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::serialization::ByteVecSink;
+    use crate::serialization::{ByteVecSink, SerializationSink};
 
     #[test]
     fn roundtrip() {
         let data_sink = ByteVecSink::new();
 
-        write_file_header(&data_sink, FILE_MAGIC_EVENT_STREAM);
+        write_file_header(&mut data_sink.as_std_write(), FILE_MAGIC_EVENT_STREAM).unwrap();
 
         let data = data_sink.into_bytes();
 
@@ -73,7 +74,7 @@ mod tests {
     #[test]
     fn invalid_magic() {
         let data_sink = ByteVecSink::new();
-        write_file_header(&data_sink, FILE_MAGIC_STRINGTABLE_DATA);
+        write_file_header(&mut data_sink.as_std_write(), FILE_MAGIC_STRINGTABLE_DATA).unwrap();
         let mut data = data_sink.into_bytes();
 
         // Invalidate the filemagic
@@ -85,7 +86,7 @@ mod tests {
     fn other_version() {
         let data_sink = ByteVecSink::new();
 
-        write_file_header(&data_sink, FILE_MAGIC_STRINGTABLE_INDEX);
+        write_file_header(&mut data_sink.as_std_write(), FILE_MAGIC_STRINGTABLE_INDEX).unwrap();
 
         let mut data = data_sink.into_bytes();
 

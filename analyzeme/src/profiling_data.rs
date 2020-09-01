@@ -4,12 +4,11 @@ use crate::timestamp::Timestamp;
 use crate::StringTable;
 use measureme::file_header::{
     read_file_header, write_file_header, CURRENT_FILE_FORMAT_VERSION, FILE_HEADER_SIZE,
-    FILE_MAGIC_EVENT_STREAM,
+    FILE_MAGIC_EVENT_STREAM, FILE_MAGIC_PAGED_FORMAT,
 };
-use measureme::ByteVecSink;
+use measureme::{GenericError, ByteVecSink};
 use measureme::{EventId, ProfilerFiles, RawEvent, SerializationSink, StringTableBuilder};
 use serde::{Deserialize, Deserializer};
-use std::error::Error;
 use std::fs;
 use std::mem;
 use std::path::Path;
@@ -44,22 +43,74 @@ pub struct ProfilingData {
 }
 
 impl ProfilingData {
-    pub fn new(path_stem: &Path) -> Result<ProfilingData, Box<dyn Error>> {
-        let paths = ProfilerFiles::new(path_stem);
+    pub fn new(path_stem: &Path) -> Result<ProfilingData, GenericError> {
+        if path_stem.with_extension("rspd").exists() {
+            use std::convert::TryInto;
+            use std::io::Read;
 
-        let string_data = fs::read(paths.string_data_file).expect("couldn't read string_data file");
-        let index_data =
-            fs::read(paths.string_index_file).expect("couldn't read string_index file");
-        let event_data = fs::read(paths.events_file).expect("couldn't read events file");
+            let page_size = measureme::PagedSinkConfig::PAGE_SIZE as u64;
 
-        ProfilingData::from_buffers(string_data, index_data, event_data)
+            let mut file = fs::File::open(path_stem.with_extension("rspd"))?;
+
+            // TODO: refactor format checking to remove code duplication
+            let file_header = &mut [0u8; FILE_HEADER_SIZE];
+            file.read_exact(file_header)?;
+            let file_format = read_file_header(file_header, FILE_MAGIC_PAGED_FORMAT)?;
+            if file_format != CURRENT_FILE_FORMAT_VERSION {
+                Err(format!(
+                    "File format version '{}' is not supported
+                     by this version of `measureme`.",
+                    file_format
+                ))?;
+            }
+
+            let file_len = file.metadata()?.len();
+            let data_len = file_len - FILE_HEADER_SIZE as u64;
+
+            // TODO: implement variable length pages, the data is already there.
+            if data_len % page_size != 0 {
+                panic!("TODO: should be an error");
+            }
+            let num_pages = data_len / page_size;
+
+            let mut event_data = Vec::new();
+            let mut string_data = Vec::new();
+            let mut index_data = Vec::new();
+
+            let mut page = vec![0u8; page_size as usize];
+
+            for _ in 0..num_pages {
+                file.read_exact(&mut page[..])?;
+
+                let bytes_used = u32::from_be_bytes(page[1..5].try_into().unwrap()) as usize;
+
+                match page[0] {
+                    1 => event_data.extend_from_slice(&page[5..5 + bytes_used]),
+                    2 => string_data.extend_from_slice(&page[5..5 + bytes_used]),
+                    3 => index_data.extend_from_slice(&page[5..5 + bytes_used]),
+                    _ => unreachable!(),
+                }
+            }
+
+            ProfilingData::from_buffers(string_data, index_data, event_data)
+        } else {
+            let paths = ProfilerFiles::new(path_stem);
+
+            let string_data =
+                fs::read(paths.string_data_file).expect("couldn't read string_data file");
+            let index_data =
+                fs::read(paths.string_index_file).expect("couldn't read string_index file");
+            let event_data = fs::read(paths.events_file).expect("couldn't read events file");
+
+            ProfilingData::from_buffers(string_data, index_data, event_data)
+        }
     }
 
     pub fn from_buffers(
         string_data: Vec<u8>,
         string_index: Vec<u8>,
         events: Vec<u8>,
-    ) -> Result<ProfilingData, Box<dyn Error>> {
+    ) -> Result<ProfilingData, GenericError> {
         let index_data = string_index;
         let event_data = events;
 
@@ -213,12 +264,12 @@ impl ProfilingDataBuilder {
         let string_table_index_sink = Arc::new(ByteVecSink::new());
 
         // The first thing in every file we generate must be the file header.
-        write_file_header(&event_sink, FILE_MAGIC_EVENT_STREAM);
+        write_file_header(&mut event_sink.as_std_write(), FILE_MAGIC_EVENT_STREAM).unwrap();
 
         let string_table = StringTableBuilder::new(
             string_table_data_sink.clone(),
             string_table_index_sink.clone(),
-        );
+        ).unwrap();
 
         ProfilingDataBuilder {
             event_sink,

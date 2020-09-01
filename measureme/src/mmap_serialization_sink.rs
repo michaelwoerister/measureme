@@ -1,10 +1,35 @@
-use crate::serialization::{Addr, SerializationSink};
+use crate::{
+    serialization::{Addr, SerializationSink},
+    GenericError, ProfilerConfig, ProfilerFiles, SerializationSinks,
+};
 use memmap::MmapMut;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+
+#[derive(Copy, Clone, Debug)]
+pub struct MmapSinkConfig;
+
+impl ProfilerConfig for MmapSinkConfig {
+    type SerializationSink = MmapSerializationSink;
+
+    fn create_sinks<P: AsRef<Path>>(
+        path_stem: P,
+    ) -> Result<SerializationSinks<MmapSerializationSink>, GenericError> {
+        let paths = ProfilerFiles::new(path_stem.as_ref());
+
+        Ok(SerializationSinks {
+            events: Arc::new(MmapSerializationSink::from_path(&paths.events_file)?),
+            string_data: Arc::new(MmapSerializationSink::from_path(&paths.string_data_file)?),
+            string_index: Arc::new(MmapSerializationSink::from_path(&paths.string_index_file)?),
+        })
+    }
+}
 
 pub struct MmapSerializationSink {
     mapped_file: MmapMut,
@@ -12,7 +37,7 @@ pub struct MmapSerializationSink {
     path: PathBuf,
 }
 
-impl SerializationSink for MmapSerializationSink {
+impl MmapSerializationSink {
     fn from_path(path: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
         // Lazily allocate 1 GB :O
         let file_size = 1 << 30;
@@ -25,6 +50,9 @@ impl SerializationSink for MmapSerializationSink {
             path: path.to_path_buf(),
         })
     }
+}
+
+impl SerializationSink for MmapSerializationSink {
 
     #[inline]
     fn write_atomic<W>(&self, num_bytes: usize, write: W) -> Addr
